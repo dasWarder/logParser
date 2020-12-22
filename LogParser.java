@@ -122,7 +122,7 @@ public class LogParser implements IPQuery, UserQuery {
 
     @Override
     public Set<String> getAllUsers() {
-        return users.stream().map(BY_NAME).collect(Collectors.toSet());
+        return filteredByPredicate(u ->true, u -> true, BY_NAME, null, null);
     }
 
     @Override
