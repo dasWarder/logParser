@@ -1,17 +1,11 @@
 package com.javarush.task.task39.task3913;
 
-import com.javarush.task.task39.task3913.query.DateQuery;
-import com.javarush.task.task39.task3913.query.IPQuery;
-import com.javarush.task.task39.task3913.query.UserQuery;
-import org.omg.PortableInterceptor.USER_EXCEPTION;
+import com.javarush.task.task39.task3913.query.*;
 
-import java.io.BufferedReader;
-import java.io.FileReader;
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.text.DateFormat;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -19,13 +13,123 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
-public class LogParser implements IPQuery, UserQuery, DateQuery {
+public class LogParser implements IPQuery, UserQuery, DateQuery, EventQuery, QLQuery {
 
     private List<User> users;
     private List<String> allStrings;
     private final Function<User, String> BY_NAME = u -> u.getName();
     private final Function<User, Date> BY_DATE = u -> u.getDate();
     private final Function<User, User> BY_USER = u -> u;
+    private final Function<User, Event> BY_EVENT = u -> u.getEvent();
+    private final Function<User, Status> BY_STATUS = u -> u.getStatus();
+    private final Function<User, String> BY_IP = u -> u.getIp();
+    private final SimpleDateFormat FORMATTER = new SimpleDateFormat("dd.MM.yyyy HH:mm:ss");
+
+    @Override
+    public Set<Object> execute(String query) {
+        boolean isComplex = false;
+        String[] splitQuery = null;
+        if(query.contains("=")) {
+            splitQuery = query.split("=");
+            isComplex = true;
+        } else if(!query.contains("=")) {
+            splitQuery = query.split(" ");
+            isComplex = false;
+        }
+        Set<Object> resultSet = null;
+
+        if (!isComplex) {
+            resultSet = (Set<Object>) getByParam(splitQuery[1], null, null, null, null);
+        } else if (isComplex) {
+            if(splitQuery[1].contains("and date")) {
+                 resultSet = parseStringWithValueAndDate(splitQuery[0], splitQuery[1]);
+            } else {
+                String value = splitQuery[1].replaceAll("\"", "").trim();
+                String[] leftPart = splitQuery[0].split(" ");
+                resultSet = (Set<Object>) getByParam(leftPart[1], leftPart[3], value, null, null);
+            }
+        }
+
+        return resultSet;
+    }
+
+    private Set<Object> parseStringWithValueAndDate(String left, String right) {
+        String[] parsedValueAndDate = right.split(" and date between ");
+        String value = parsedValueAndDate[0].replaceAll("\"", "").trim();
+        String[] dates = parsedValueAndDate[1].split(" and ");
+        String after = dates[0].replace("\"", "").trim();
+        String before = dates[1].replace("\"", "").trim();
+
+        String[] leftPart = left.split(" ");
+        return (Set<Object>) getByParam(leftPart[1], leftPart[3], value, after, before);
+    }
+
+    private <T> Set<T> getByParamWithCase(String filterParam, String value, Function<User, T> function, Date after, Date before) {
+        if (filterParam.equals("user")) {
+            Predicate<User> filteredByUser = u -> u.getName().equals(value);
+            return filteredByPredicate(filteredByUser, u -> true, function, after == null? null : after, before == null? null : before);
+        } else if (filterParam.equals("date")) {
+            Predicate<User> filteredByDate = null;
+            try {
+                Date parsedDate = FORMATTER.parse(value);
+                filteredByDate = u -> u.getDate().toString().equals(parsedDate.toString());
+            } catch (ParseException e) {
+                e.printStackTrace();
+            }
+            return filteredByPredicate(filteredByDate, u -> true, function, after == null? null : after, before == null? null : before);
+        } else if (filterParam.equals("event")) {
+            Predicate<User> filteredByEvent = u -> u.getEvent().toString().equals(value);
+            return filteredByPredicate(filteredByEvent, u -> true, function, after == null? null : after, before == null? null : before);
+        } else if(filterParam.equals("status")) {
+            Predicate<User> filteredByStatus = u -> u.getStatus().toString().equals(value);
+            return filteredByPredicate(filteredByStatus, u -> true, function, after == null? null : after, before == null? null : before);
+        } else if (filterParam.equals("ip")) {
+            Predicate<User> filteredByIp = u -> u.getIp().equals(value);
+            return filteredByPredicate(filteredByIp, u -> true, function, after == null? null : after, before == null? null : before);
+        }
+        return null;
+    }
+
+
+    private <T> Set<? extends Object> getByParam(String param, String filterParam, String value, String after, String before){
+        Date afterDate = null;
+        Date beforeDate = null;
+        try {
+            afterDate = after == null? null : FORMATTER.parse(after);
+            beforeDate = before == null? null : FORMATTER.parse(before);
+        } catch (ParseException e) {
+            e.printStackTrace();
+        }
+
+        switch (param) {
+            case "ip":
+                if(value == null && filterParam == null) {
+                    return getUniqueIPs(null, null);
+                }
+                return getByParamWithCase(filterParam, value, BY_IP, afterDate, beforeDate);
+            case "user":
+                if(value == null && filterParam == null) {
+                    return getAllUsers();
+                }
+                return getByParamWithCase(filterParam, value, BY_NAME, afterDate, beforeDate);
+            case "date":
+                if(value == null && filterParam == null) {
+                    return filteredByPredicate(u -> true, u -> true, BY_DATE, null, null);
+                }
+                return getByParamWithCase(filterParam, value, BY_DATE, afterDate, beforeDate);
+            case "event":
+                if(value == null && filterParam == null) {
+                    return getAllEvents(null, null);
+                }
+                return getByParamWithCase(filterParam, value, BY_EVENT, afterDate, beforeDate);
+            case "status":
+                if(value == null && filterParam == null) {
+                    return filteredByPredicate(u -> true, u -> true, BY_STATUS, null, null);
+                }
+                return getByParamWithCase(filterParam, value, BY_STATUS, afterDate, beforeDate);
+        }
+        return null;
+    }
 
 
     private class User {
@@ -37,15 +141,7 @@ public class LogParser implements IPQuery, UserQuery, DateQuery {
         private Status status;
 
         public User() {};
-        public User(String ip, String name, Date date, Event event, Integer code, Status status) {
-            this.ip = ip;
-            this.name = name;
-            this.date = date;
-            this.event = event;
-            this.code = code;
-            this.status = status;
-        }
-
+        
         public String getIp() {
             return ip;
         }
@@ -93,37 +189,8 @@ public class LogParser implements IPQuery, UserQuery, DateQuery {
         public void setStatus(Status status) {
             this.status = status;
         }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
-            User user = (User) o;
-            return Objects.equals(ip, user.ip) &&
-                    Objects.equals(name, user.name) &&
-                    Objects.equals(date, user.date) &&
-                    event == user.event &&
-                    Objects.equals(code, user.code) &&
-                    status == user.status;
-        }
-
-        @Override
-        public int hashCode() {
-            return Objects.hash(ip, name, date, event, code, status);
-        }
-
-        @Override
-        public String toString() {
-            return "User{" +
-                    "ip='" + ip + '\'' +
-                    ", name='" + name + '\'' +
-                    ", date=" + date +
-                    ", event=" + event +
-                    ", code=" + code +
-                    ", status=" + status +
-                    '}';
-        }
     }
+
 
     @Override
     public Set<String> getAllUsers() {
@@ -137,8 +204,8 @@ public class LogParser implements IPQuery, UserQuery, DateQuery {
 
     @Override
     public int getNumberOfUserEvents(String user, Date after, Date before) {
-        Predicate<User> filteredByEvent = u ->u.getName().equals(user);
-        Function<User, Event> toEvent = u->u.getEvent();
+        Predicate<User> filteredByEvent = u -> u.getName().equals(user);
+        Function<User, Event> toEvent = u -> u.getEvent();
 
         return filteredByPredicate(filteredByEvent, u -> true,toEvent, after, before).size();
 
@@ -148,7 +215,7 @@ public class LogParser implements IPQuery, UserQuery, DateQuery {
     public Set<String> getUsersForIP(String ip, Date after, Date before) {
         Predicate<User> filteredByIp = u -> u.getIp().equals(ip);
 
-       return filteredByPredicate(filteredByIp, user -> true, BY_NAME, after, before);
+        return filteredByPredicate(filteredByIp, user -> true, BY_NAME, after, before);
     }
 
     @Override
@@ -160,7 +227,7 @@ public class LogParser implements IPQuery, UserQuery, DateQuery {
 
     @Override
     public Set<String> getDownloadedPluginUsers(Date after, Date before) {
-        Predicate<User> filteredByPlugin = u->u.getEvent() == Event.DOWNLOAD_PLUGIN;
+        Predicate<User> filteredByPlugin = u -> u.getEvent() == Event.DOWNLOAD_PLUGIN;
 
         return filteredByPredicate(filteredByPlugin, user -> true, BY_NAME, after, before);
     }
@@ -202,16 +269,6 @@ public class LogParser implements IPQuery, UserQuery, DateQuery {
         return filteredByPredicate(filteredByDone, filteredByTask, BY_NAME, after, before);
     }
 
-    private <T> Set<T> filteredByPredicate(Predicate<User> predicate, Predicate<User> optionalPredicate, Function<User, T> function, Date after, Date before) {
-        List<User> filteredByDate = getTimeFrame(after, before, users);
-        return  filteredByDate.stream()
-                .filter(predicate)
-                .filter(optionalPredicate)
-                .map(function)
-                .collect(Collectors.toSet());
-    }
-
-
     @Override
     public Set<Date> getDatesForUserAndEvent(String user, Event event, Date after, Date before) {
         Predicate<User> filteredByUser = u -> u.getName().equals(user);
@@ -235,37 +292,25 @@ public class LogParser implements IPQuery, UserQuery, DateQuery {
     }
 
     @Override
-    //NEED CHECK STATUS IS OK OR FAILED
     public Date getDateWhenUserLoggedFirstTime(String user, Date after, Date before) {
-//       Predicate<User> filteredByUser = u -> u.getName().equals(user);
-//       Predicate<User> filteredByEvent = u -> u.getEvent() == Event.LOGIN;
         Set<Date> dates = returnFilteredSet(BY_DATE, after, before, user, Event.LOGIN);
 
-//        Set<Date> dates = filteredByPredicate(filteredByUser, filteredByEvent, BY_DATE, after, before);
-       return sortDates(dates);
+        return sortDates(dates);
     }
 
     @Override
-    //NEED CHECK STATUS IS OK OR FAILED
     public Date getDateWhenUserSolvedTask(String user, int task, Date after, Date before) {
-//        Predicate<User> filteredByUser = u -> u.getName().equals(user);
-//        Predicate<User> filteredByEvent = u -> u.getEvent() == Event.SOLVE_TASK;
         Predicate<User> filteredByTask = u -> u.getCode() == task;
 
-//        Set<User> users = filteredByPredicate(filteredByUser, filteredByEvent, BY_USER, after, before);
         Set<User> users = returnFilteredSet(BY_USER, after, before, user, Event.SOLVE_TASK);
         Set<Date> usersByDate = filteredByPredicateWithAddParam(users, filteredByTask, BY_DATE);
         return sortDates(usersByDate);
     }
 
     @Override
-    //NEED CHECK STATUS IS OK OR FAILED
     public Date getDateWhenUserDoneTask(String user, int task, Date after, Date before) {
-//       Predicate<User> filteredByUser = u -> u.getName().equals(user);
-//       Predicate<User> filteredByEvent = u -> u.getEvent() == Event.DONE_TASK;
-       Predicate<User> filteredByTask = u -> u.getCode() == task;
+        Predicate<User> filteredByTask = u -> u.getCode() == task;
 
-//        Set<User> users = filteredByPredicate(filteredByUser, filteredByEvent, BY_USER, after, before);
         Set<User> users = returnFilteredSet(BY_USER, after, before, user, Event.DONE_TASK);
         Set<Date> usersByDate = filteredByPredicateWithAddParam(users, filteredByTask, BY_DATE);
         return sortDates(usersByDate);
@@ -273,22 +318,92 @@ public class LogParser implements IPQuery, UserQuery, DateQuery {
 
     @Override
     public Set<Date> getDatesWhenUserWroteMessage(String user, Date after, Date before) {
-//        Predicate<User> filteredByUser = u -> u.getName().equals(user);
-//        Predicate<User> filteredByEvent = u -> u.getEvent() == Event.WRITE_MESSAGE;
-//
-//        return filteredByPredicate(filteredByUser, filteredByEvent, BY_DATE, after, before);
-
         return returnFilteredSet(BY_DATE, after, before, user, Event.WRITE_MESSAGE);
     }
 
     @Override
     public Set<Date> getDatesWhenUserDownloadedPlugin(String user, Date after, Date before) {
-//        Predicate<User> filteredByUser = u -> u.getName().equals(user);
-//        Predicate<User> filteredByEvent = u -> u.getEvent() == Event.DOWNLOAD_PLUGIN;
-//
-//        return filteredByPredicate(filteredByUser, filteredByEvent, BY_DATE, after, before);
-
         return returnFilteredSet(BY_DATE, after, before, user, Event.DOWNLOAD_PLUGIN);
+    }
+
+    @Override
+    public int getNumberOfAllEvents(Date after, Date before) {
+
+        return getAllEvents(after, before).size();
+    }
+
+    @Override
+    public Set<Event> getAllEvents(Date after, Date before) {
+        Predicate<User> filteredByEvent = u -> u.getEvent() != null;
+
+        return filteredByPredicate(filteredByEvent, u -> true, BY_EVENT, after, before);
+    }
+
+    @Override
+    public Set<Event> getEventsForIP(String ip, Date after, Date before) {
+        Predicate<User> filteredByIp = u -> u.getIp().equals(ip);
+
+        return filteredByPredicate(filteredByIp, u -> true, BY_EVENT, after, before);
+    }
+
+    @Override
+    public Set<Event> getEventsForUser(String user, Date after, Date before) {
+        Predicate<User> filteredByUser = u -> u.getName().equals(user);
+
+        return filteredByPredicate(filteredByUser, u -> true, BY_EVENT, after, before);
+    }
+
+    @Override
+    public Set<Event> getFailedEvents(Date after, Date before) {
+        Predicate<User> filteredByStatus = u -> u.getStatus() == Status.FAILED;
+
+        return filteredByPredicate(filteredByStatus, u -> true, BY_EVENT, after, before);
+    }
+
+    @Override
+    public Set<Event> getErrorEvents(Date after, Date before) {
+        Predicate<User> filteredByEvent = u -> u.getStatus() == Status.ERROR;
+
+        return filteredByPredicate(filteredByEvent, u -> true, BY_EVENT, after, before);
+    }
+
+    @Override
+    public int getNumberOfAttemptToSolveTask(int task, Date after, Date before) {
+        return returnFilteredSet(BY_USER, after, before, Event.SOLVE_TASK, task).size();
+    }
+
+    @Override
+    public int getNumberOfSuccessfulAttemptToSolveTask(int task, Date after, Date before) {
+        Predicate<User> filteredByEvent = u -> u.getEvent() == Event.DONE_TASK;
+        Predicate<User> filteredByTask = u -> u.getCode() == task;
+        return filteredByPredicate(filteredByEvent, filteredByTask, BY_USER, after, before).size();
+    }
+
+    @Override
+    public Map<Integer, Integer> getAllSolvedTasksAndTheirNumber(Date after, Date before) {
+        return filteredAndMapped(Event.SOLVE_TASK, after, before);
+    }
+
+    @Override
+    public Map<Integer, Integer> getAllDoneTasksAndTheirNumber(Date after, Date before) {
+        return filteredAndMapped(Event.DONE_TASK, after, before);
+    }
+
+    private Map<Integer, Integer> filteredAndMapped(Event event, Date after, Date before) {
+        List<User> filteredByDate = getTimeFrame(after, before, users);
+
+        return filteredByDate.stream()
+                .filter(u -> u.getEvent() == event)
+                .collect(Collectors.groupingBy(User::getCode, Collectors.summingInt(x -> 1)));
+    }
+
+    private <T> Set<T> filteredByPredicate(Predicate<User> predicate, Predicate<User> optionalPredicate, Function<User, T> function, Date after, Date before) {
+        List<User> filteredByDate = getTimeFrame(after, before, users);
+        return  filteredByDate.stream()
+                .filter(predicate)
+                .filter(optionalPredicate)
+                .map(function)
+                .collect(Collectors.toSet());
     }
 
     private <T> Set<T> filteredByPredicateWithAddParam(Set<User> set, Predicate<User> filter, Function<User, T> function) {
@@ -300,7 +415,6 @@ public class LogParser implements IPQuery, UserQuery, DateQuery {
 
     private <T, U> Set<T> returnFilteredSet(Function<User, T> function, Date after, Date before, U ... params) {
         List<Predicate<User>> filters = new LinkedList<>();
-
         for(U param : params) {
             if(param instanceof Event) {
                 filters.add(u -> u.getEvent() == param);
@@ -308,9 +422,10 @@ public class LogParser implements IPQuery, UserQuery, DateQuery {
                 filters.add(u -> u.getName().equals(param));
             } else if (param instanceof Status) {
                 filters.add(u -> u.getStatus() == param);
+            } else if (param instanceof Integer) {
+                filters.add(u -> u.getCode() == param);
             }
         }
-
         return filteredByPredicate(filters.get(0), filters.get(1), function, after, before);
     }
 
@@ -332,8 +447,7 @@ public class LogParser implements IPQuery, UserQuery, DateQuery {
     public int getNumberOfUniqueIPs(Date after, Date before) {
         return getUniqueIPs(after, before).size();
     }
-
-
+    
 
     @Override
     public Set<String> getUniqueIPs(Date after, Date before) {
@@ -343,7 +457,6 @@ public class LogParser implements IPQuery, UserQuery, DateQuery {
         for(User user : timeFrame) {
             uniqIps.add(user.getIp());
         }
-
         return uniqIps;
     }
 
@@ -400,7 +513,6 @@ public class LogParser implements IPQuery, UserQuery, DateQuery {
 
             users.add(user);
         }
-
         return users;
     }
 
@@ -442,17 +554,14 @@ public class LogParser implements IPQuery, UserQuery, DateQuery {
                         .filter(u -> paramValue.equals(u.getStatus().name()))
                         .collect(Collectors.toSet());
             }
-
         return ipFromUserToString(filteredByParam);
     }
 
     private Set<String> ipFromUserToString(Set<User> users) {
         Set<String> ipString = new HashSet<>();
-
         for(User user : users) {
             ipString.add(user.getIp());
         }
-
         return ipString;
     }
 }
